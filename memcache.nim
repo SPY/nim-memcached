@@ -8,7 +8,7 @@ type ConnectionClosedError* = object of IOError
 type NotConnectedError* = object of IOError
 type KeyNotFoundError* = object of IOError
 
-type Connection = object
+type Connection* = object
   host: string
   port: Port
 
@@ -19,6 +19,7 @@ type MemcacheClient = object
   socket: Socket
   status: ConnectionStatus
 
+# https://code.google.com/p/memcached/wiki/BinaryProtocolRevamped#Request_header
 type RequestHeader = object {. pure .}
   magic: uint8
   opcode: uint8
@@ -30,6 +31,7 @@ type RequestHeader = object {. pure .}
   opaque: uint32
   cas: uint64
 
+# https://code.google.com/p/memcached/wiki/BinaryProtocolRevamped#Response_header
 type ResponseHeader = object {. pure .}
   magic: uint8
   opcode: uint8
@@ -41,9 +43,11 @@ type ResponseHeader = object {. pure .}
   opaque: uint32
   cas: uint64
 
+# https://code.google.com/p/memcached/wiki/BinaryProtocolRevamped#Magic_Byte
 const ReqMagic:uint8 = 0x80
 const ResMagic:uint8 = 0x81
 
+# https://code.google.com/p/memcached/wiki/BinaryProtocolRevamped#Response_Status
 type ResponseStatus = enum
   NoError                = 0x0000
   KeyNotFound            = 0x0001
@@ -62,6 +66,7 @@ type ResponseStatus = enum
   Busy                   = 0x0085
   TemporaryFailure       = 0x0086
 
+# https://code.google.com/p/memcached/wiki/BinaryProtocolRevamped#Command_Opcodes
 type CommandOpcode = enum
   Get       = 0x00
   Set       = 0x01
@@ -75,7 +80,15 @@ type CommandOpcode = enum
   GetQ      = 0x09
   Noop      = 0x0a
   Version   = 0x0b
+  GetK      = 0x0c
+  GetKQ     = 0x0d
+  Append    = 0x0e
+  Prepend   = 0x0f
   Stat      = 0x10
+  SetQ      = 0x11
+  AddQ      = 0x12
+  ReplaceQ  = 0x13
+  DeleteQ   = 0x14
   Touch     = 0x1c
 
 type DataType = enum
@@ -188,7 +201,7 @@ type AddExtras = object {. pure .}
   flags, expiration: uint32
 
 type AddStatus* = enum
-  Added, AlreadyExists
+  Added, AlreadyExists, AddError
 
 proc toRawData(extras: ptr AddExtras): RawData =
   RawData(data: cast[pointer](extras), size: sizeof(AddExtras))
@@ -196,10 +209,10 @@ proc toRawData(extras: ptr AddExtras): RawData =
 proc add*(client: MemcacheClient, key: string, value: string, expiration: Sec = Sec(0)): AddStatus {. discardable .} =
   var extras = AddExtras(flags: Flags, expiration: expiration.int32.htonl().uint32)
   let response = client.sendCommand(Add, toRawData(addr extras), key.toRawData(), value.toRawData())
-  if response.header.status == ord(NoError):
-    return Added
-  if response.header.status == ord(KeyExists):
-    return AlreadyExists
+  case response.header.status:
+    of ord(NoError): Added
+    of ord(KeyExists): AlreadyExists
+    else: AddError
 
 proc get*(client: MemcacheClient, key: string): string 
   {. raises: [KeyNotFoundError, NotConnectedError, ConnectionClosedError, TimeoutError, OSError] .} =
@@ -241,36 +254,38 @@ proc touch*(client: MemcacheClient, key: string, expiration: Sec = Sec(0)): bool
 when isMainModule:
   const expireTest = false
   const touchTest = false
-  const helloKey = "hello"
+  const hello = "hello"
+  const world = "world"
   var memcache = newMemcache()
   memcache.connect(Connection(host: "127.0.0.1", port: Port(11211)))
-  assert memcache.status == stConnected
-  memcache.add(helloKey, "world")
-  assert memcache.get(helloKey) == "world"
-  assert memcache[helloKey] == "world"
-  memcache[helloKey] = "another"
-  assert memcache[helloKey] == "another"
-  assert memcache.contains(helloKey)
-  memcache.delete(helloKey)
-  assert helloKey notin memcache # the same as not memcache.contains(helloKey)
+  assert memcache.status == stConnected, "Status should be changed"
+  memcache.delete(hello)
+  assert memcache.add(hello, world) == Added, "Key shouldn't exist before"
+  assert memcache.get(hello) == world, "Get should return value"
+  assert memcache[hello] == world, "Getter should work like get"
+  memcache[hello] = "another"
+  assert memcache[hello] == "another", "Setter should change value"
+  assert memcache.contains(hello), "Key should be in memcache"
+  memcache.delete(hello)
+  assert hello notin memcache, "Key shouldn't be in memcache after remove"
   try:
-    discard memcache.get(helloKey)
-    assert false
+    discard memcache.get(hello)
+    assert false, "Get of removed value should raise exception"
   except KeyNotFoundError:
     assert true
   when expireTest:
-    memcache.add(helloKey, "world", 2.Sec)
+    memcache.add(hello, world, 2.Sec)
     memcache["zippy"] = ("second", 2.Sec)
     sleep(1000)
-    assert helloKey in memcache
-    assert memcache.contains("zippy")
+    assert hello in memcache, "Key still should be in memcache"
+    assert memcache.contains("zippy"), "Key setted by tuple setter should set expiration too"
     sleep(1500)
-    assert(helloKey notin memcache)
-    assert(not memcache.contains("zippy"))
+    assert(hello notin memcache, "Should be expired")
+    assert(not memcache.contains("zippy"), "Should be expired")
   when touchTest:
-    assert(not memcache.touch(helloKey))
-    memcache[helloKey] = ("world", 2.Sec)
+    assert(not memcache.touch(hello), "Touch non-existed key should return false")
+    memcache[hello] = (world, 2.Sec)
     sleep(1000)
-    assert memcache.touch(helloKey, 3.Sec)
+    assert memcache.touch(hello, 3.Sec), "Touch existed key should return true"
     sleep(1500)
-    assert helloKey in memcache
+    assert hello in memcache, "Key should be in memcach after touch"

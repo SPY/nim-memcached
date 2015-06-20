@@ -12,7 +12,7 @@ echo memcache.exists("hello") # => true
 memcache.touch("hello")
 memcache.delete("hello")
 
-# with syntaxic sugar
+# with syntax sugar
 memcache["hello"] = ("world", 5.Sec) # memcache.set("hello", "world", 5.Sec)
 assert "hello" in memcache # memcache.contains("hello")
 assert "not exists" notin memcache
