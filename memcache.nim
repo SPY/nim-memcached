@@ -81,7 +81,7 @@ type CommandOpcode = enum
 type DataType = enum
   Raw = 0x00
 
-type Sec = distinct uint32
+type Sec* = distinct uint32
 
 type Response = object
   header: ResponseHeader
@@ -211,14 +211,17 @@ proc get*(client: MemcacheClient, key: string): string
 proc `[]`*(client: MemcacheClient, key: string): string =
   client.get(key)
 
-proc set*(client: MemcacheClient, key: string, value: string, expiration: Sec = Sec(0)): void =
+proc set*(client: MemcacheClient, key: string, value: string, expiration: Sec = Sec(0)): bool {. discardable .} =
   var extras = AddExtras(flags: Flags, expiration: expiration.int32.htonl().uint32)
-  discard client.sendCommand(Set, toRawData(addr extras), key.toRawData(), value.toRawData())
+  client.sendCommand(Set, toRawData(addr extras), key.toRawData(), value.toRawData()).header.status == ord(NoError)
 
 proc `[]=`*(client: MemcacheClient, key: string, value: string): void =
   client.set(key, value)
 
-proc exists*(client: MemcacheClient, key: string): bool
+proc `[]=`*(client: MemcacheClient, key: string, value: tuple[value: string, expiration: Sec]): void =
+  client.set(key, value.value, value.expiration)
+
+proc contains*(client: MemcacheClient, key: string): bool
   {. raises: [ConnectionClosedError, NotConnectedError, TimeoutError, OSError] .} =
   try:
     discard client.get(key)
@@ -229,13 +232,15 @@ proc exists*(client: MemcacheClient, key: string): bool
 proc delete*(client: MemcacheClient, key: string): void =
   discard client.sendCommand(Delete, key = key.toRawData())
 
-proc touch*(client: MemcacheClient, key: string, expiration: Sec = Sec(0)): void =
+proc touch*(client: MemcacheClient, key: string, expiration: Sec = Sec(0)): bool {. discardable .} =
   var exp = expiration.int32.htonl()
   var extras = RawData(data: addr exp, size: sizeof(expiration))
-  discard client.sendCommand(Touch, extras = extras, key = key.toRawData())
+  let response = client.sendCommand(Touch, extras = extras, key = key.toRawData())
+  response.header.status == ord(NoError)
 
 when isMainModule:
   const expireTest = false
+  const touchTest = false
   const helloKey = "hello"
   var memcache = newMemcache()
   memcache.connect(Connection(host: "127.0.0.1", port: Port(11211)))
@@ -245,10 +250,9 @@ when isMainModule:
   assert memcache[helloKey] == "world"
   memcache[helloKey] = "another"
   assert memcache[helloKey] == "another"
-  assert memcache.exists(helloKey)
-  memcache.touch(helloKey, 10.Sec)
+  assert memcache.contains(helloKey)
   memcache.delete(helloKey)
-  assert(not memcache.exists(helloKey))
+  assert helloKey notin memcache # the same as not memcache.contains(helloKey)
   try:
     discard memcache.get(helloKey)
     assert false
@@ -256,7 +260,17 @@ when isMainModule:
     assert true
   when expireTest:
     memcache.add(helloKey, "world", 2.Sec)
+    memcache["zippy"] = ("second", 2.Sec)
     sleep(1000)
-    assert memcache.exists(helloKey)
+    assert helloKey in memcache
+    assert memcache.contains("zippy")
     sleep(1500)
-    assert(not memcache.exists(helloKey))
+    assert(helloKey notin memcache)
+    assert(not memcache.contains("zippy"))
+  when touchTest:
+    assert(not memcache.touch(helloKey))
+    memcache[helloKey] = ("world", 2.Sec)
+    sleep(1000)
+    assert memcache.touch(helloKey, 3.Sec)
+    sleep(1500)
+    assert helloKey in memcache
