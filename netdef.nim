@@ -49,10 +49,31 @@ macro network*(command, body: stmt): stmt {. immediate .} =
       let typeName = command[1]
       result = quote do:
         type `typeName` = object {. pure .}
+      let ctorName = ident("new" & capitalize($typeName))
+      let value = genSym(nskVar, "value")
+      var ctor = quote do:
+        proc `ctorName`(): ref `typeName` =
+          var `value` = new(`typeName`)
+      var ctorParams = ctor[0][3]
+      var ctorBody = ctor[0][6]
+      # result.add(ctor)
       var recList = newNimNode(nnkRecList)
       for i in body.children:
         let fieldName = i[0]
-        let fieldType = i[1][0]
+        # let fieldType = i[1][0]
+        var fieldType, defValue: NimNode
+        case i[1][0].kind
+        of nnkIdent:
+          fieldType = i[1][0]
+          defValue = newIntLitNode(0)
+        of nnkAsgn:
+          fieldType = i[1][0][0]
+          defValue = i[1][0][1]
+        else: discard
+        let assign = quote do:
+          `value`.`fieldName` = `fieldName`
+        ctorParams.add(newIdentDefs(fieldName, fieldType, defValue))
+        ctorBody.add(assign[0])
         if isBigInt($fieldType):
           let capFieldName = ident("big" & capitalize($fieldName))
           recList.add(newIdentDefs(capFieldName, fieldType))
@@ -79,11 +100,13 @@ macro network*(command, body: stmt): stmt {. immediate .} =
             result.add(setterProc[0])
         else:
           recList.add(newIdentDefs(fieldName, fieldType))
+      ctorBody.add(value)
       result[0][0][2][2] = recList
+      result.add(ctor[0])
 
 when isMainModule:
   network struct RequestHeader:
-    magic: uint8
+    magic: uint8 = 0x80
     opcode: uint8
     keyLength: uint16
     extrasLength: uint8

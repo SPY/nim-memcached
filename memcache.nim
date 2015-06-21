@@ -19,9 +19,13 @@ type MemcacheClient = object
   socket: Socket
   status: ConnectionStatus
 
+# https://code.google.com/p/memcached/wiki/BinaryProtocolRevamped#Magic_Byte
+const ReqMagic:uint8 = 0x80
+const ResMagic:uint8 = 0x81
+
 # https://code.google.com/p/memcached/wiki/BinaryProtocolRevamped#Request_header
 network struct RequestHeader:
-  magic: uint8
+  magic: uint8 = ReqMagic
   opcode: uint8
   keyLength: uint16
   extrasLength: uint8
@@ -33,7 +37,7 @@ network struct RequestHeader:
 
 # https://code.google.com/p/memcached/wiki/BinaryProtocolRevamped#Response_header
 network struct ResponseHeader:
-  magic: uint8
+  magic: uint8 = ResMagic
   opcode: uint8
   keyLength: uint16
   extrasLength: uint8
@@ -42,10 +46,6 @@ network struct ResponseHeader:
   totalBodyLength: uint32
   opaque: uint32
   cas: uint64
-
-# https://code.google.com/p/memcached/wiki/BinaryProtocolRevamped#Magic_Byte
-const ReqMagic:uint8 = 0x80
-const ResMagic:uint8 = 0x81
 
 # https://code.google.com/p/memcached/wiki/BinaryProtocolRevamped#Response_Status
 type ResponseStatus = enum
@@ -170,9 +170,9 @@ proc waitForResponse(client: MemcacheClient): Response =
     if extrasSize > 0:
       extras = data[0..extrasSize-1]
     if keySize > 0:
-      key = data[int(extrasSize)..int(extrasSize + keySize - 1)]
+      key = data[extrasSize .. extrasSize + keySize - 1]
     if bodySize - extrasSize - keySize > 0:
-      value = data[int(extrasSize + keySize) .. int(bodySize - 1)]
+      value = data[extrasSize + keySize .. bodySize - 1]
   Response(header: header[], extras: extras, key: key, value: value)
 
 type RawData = object
@@ -184,22 +184,25 @@ const empty: RawData = RawData(data: nil, size: 0)
 proc toRawData(str: string): RawData =
   RawData(data: str.cstring, size: str.len())
 
+proc send(socket: Socket, data: RawData) =
+  discard socket.send(data.data, data.size)
+
 proc justSendCommand(client: MemcacheClient, opcode: CommandOpcode, extras: RawData = empty, key: RawData = empty, value: RawData = empty): void =
   if client.status != stConnected:
     raise newException(NotConnectedError, "Memcache is not connected. Call connect function before")
-  var header = new(RequestHeader)
-  header.magic = ReqMagic
-  header.opcode = ord(opcode)
-  header.extrasLength = extras.size.uint8
-  header.keyLength = key.size.uint16
-  header.totalBodyLength = uint32(extras.size + key.size + value.size)
+  var header = newRequestHeader(
+    opcode = ord(opcode),
+    extrasLength = extras.size.uint8(),
+    keyLength = key.size.uint16(),
+    totalBodyLength = uint32(extras.size + key.size + value.size)
+  )
   discard client.socket.send(cast[pointer](header), sizeof(RequestHeader))
   if extras.size > 0:
-    discard client.socket.send(extras.data, extras.size)
+    client.socket.send(extras)
   if key.size > 0:
-    discard client.socket.send(key.data, key.size)
+    client.socket.send(key)
   if value.size > 0:
-    discard client.socket.send(value.data, value.size)
+    client.socket.send(value)
 
 proc sendCommand(client: MemcacheClient, opcode: CommandOpcode, extras: RawData = empty, key: RawData = empty, value: RawData = empty): Response =
   client.justSendCommand(opcode, extras, key, value)
@@ -235,8 +238,7 @@ proc toRawData(extras: ref AddExtras): RawData =
   RawData(data: cast[pointer](extras), size: sizeof(AddExtras))
 
 proc add*(client: MemcacheClient, key: string, value: string, expiration: Sec = Sec(0)): AddStatus {. discardable .} =
-  var extras = new(AddExtras)
-  extras.expiration = expiration.uint32()
+  var extras = newAddExtras(expiration = expiration.uint32())
   let response = client.sendCommand(Add, extras.toRawData(), key.toRawData(), value.toRawData())
   case response.header.status:
     of ord(NoError): Added
@@ -254,8 +256,7 @@ proc `[]`*(client: MemcacheClient, key: string): string =
   client.get(key)
 
 proc set*(client: MemcacheClient, key: string, value: string, expiration: Sec = Sec(0)): bool {. discardable .} =
-  var extras = new(AddExtras)
-  extras.expiration = expiration.uint32()
+  var extras = newAddExtras(expiration = expiration.uint32())
   client.sendCommand(Set, extras.toRawData(), key.toRawData(), value.toRawData()).header.status == ord(NoError)
 
 proc `[]=`*(client: MemcacheClient, key: string, value: string): void =
