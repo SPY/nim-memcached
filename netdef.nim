@@ -22,6 +22,7 @@ proc ntohll*(val: int64): int64 =
 
 proc getterTypes(strType: string): tuple[t, procName: string] =
   case strType:
+  of "int8", "uint8": return (strType, strType)
   of "int16", "uint16": return ("int16", "ntohs")
   of "int32", "uint32": return ("int32", "ntohl")
   of "int64", "uint64": return ("int64", "ntohll")
@@ -33,6 +34,7 @@ proc getterTypes(strType: string): tuple[t, procName: string] =
 
 proc setterTypes(strType: string): tuple[t, procName: string] =
   case strType:
+  of "int8", "uint8": return (strType, strType)
   of "int16", "uint16": return ("int16", "htons")
   of "int32", "uint32": return ("int32", "htonl")
   of "int64", "uint64": return ("int64", "htonll")
@@ -62,6 +64,8 @@ macro network*(command, body: stmt): stmt {. immediate .} =
         let fieldName = i[0]
         # let fieldType = i[1][0]
         var fieldType, defValue: NimNode
+        var isEnum = false
+        var enumType: NimNode
         case i[1][0].kind
         of nnkIdent:
           fieldType = i[1][0]
@@ -69,23 +73,32 @@ macro network*(command, body: stmt): stmt {. immediate .} =
         of nnkAsgn:
           fieldType = i[1][0][0]
           defValue = i[1][0][1]
+        of nnkCall:
+          fieldType = i[1][0][1]
+          isEnum = true
+          enumType = i[1][0][0]
+          let def = quote do:
+            low(`enumType`)
+          defValue = def[0]
         else: discard
         let assign = quote do:
           `value`.`fieldName` = `fieldName`
-        ctorParams.add(newIdentDefs(fieldName, fieldType, defValue))
+        let valType = if isEnum: enumType else: fieldType
+        ctorParams.add(newIdentDefs(fieldName, valType, defValue))
         ctorBody.add(assign[0])
-        if isBigInt($fieldType):
+        if isBigInt($fieldType) or isEnum:
           let capFieldName = ident("big" & capitalize($fieldName))
           recList.add(newIdentDefs(capFieldName, fieldType))
           block getter:
             let (convType, conv) = getterTypes($fieldType)
             let (convTypeIdent, convIdent) = (ident(convType), ident(conv))
+            let retType = if isEnum: enumType else: fieldType
             let getterProc = quote do:
-              proc `fieldName`(self: `typeName`): `fieldType` =
-                self.`capFieldName`.`convTypeIdent`.`convIdent`.`fieldType`
+              proc `fieldName`(self: `typeName`): `retType` =
+                self.`capFieldName`.`convTypeIdent`.`convIdent`.`retType`
             let getterProcRef = quote do:
-              proc `fieldName`(self: ref `typeName`): `fieldType` =
-                self[].`capFieldName`.`convTypeIdent`.`convIdent`.`fieldType`
+              proc `fieldName`(self: ref `typeName`): `retType` =
+                self[].`capFieldName`.`convTypeIdent`.`convIdent`.`retType`
             result.add(getterProc[0])
             result.add(getterProcRef[0])
           block setter:
@@ -95,8 +108,8 @@ macro network*(command, body: stmt): stmt {. immediate .} =
             setterName.add(fieldName)
             setterName.add(ident("="))
             let setterProc = quote do:
-              proc `setterName`(self: ref `typeName`, value: `fieldType`) =
-                self.`capFieldName` = value.`convTypeIdent`.`convIdent`.`fieldType`
+              proc `setterName`(self: ref `typeName`, value: `valType`) =
+                self.`capFieldName` = ord(value).`convTypeIdent`.`convIdent`.`fieldType`
             result.add(setterProc[0])
         else:
           recList.add(newIdentDefs(fieldName, fieldType))
@@ -105,9 +118,12 @@ macro network*(command, body: stmt): stmt {. immediate .} =
       result.add(ctor[0])
 
 when isMainModule:
+  type Opcode = enum
+    One = 3, Two = 7, Three = 8
+
   network struct RequestHeader:
     magic: uint8 = 0x80
-    opcode: uint8
+    opcode: Opcode(uint8)
     keyLength: uint16
     extrasLength: uint8
     dataType: uint8
@@ -117,7 +133,7 @@ when isMainModule:
     cas: uint64
 
   assert sizeof(RequestHeader) == 24
-  var header = new(RequestHeader)
-  header.keyLength = 8
+  var header = newRequestHeader(keyLength = 8)
+  assert header.opcode == One
   assert header.bigKeyLength.int() == (8 shl 8)
   assert header.keyLength.int() == 8

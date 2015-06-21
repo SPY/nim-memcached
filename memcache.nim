@@ -23,30 +23,6 @@ type MemcacheClient = object
 const ReqMagic:uint8 = 0x80
 const ResMagic:uint8 = 0x81
 
-# https://code.google.com/p/memcached/wiki/BinaryProtocolRevamped#Request_header
-network struct RequestHeader:
-  magic: uint8 = ReqMagic
-  opcode: uint8
-  keyLength: uint16
-  extrasLength: uint8
-  dataType: uint8
-  vbucket: uint16
-  totalBodyLength: uint32
-  opaque: uint32
-  cas: uint64
-
-# https://code.google.com/p/memcached/wiki/BinaryProtocolRevamped#Response_header
-network struct ResponseHeader:
-  magic: uint8 = ResMagic
-  opcode: uint8
-  keyLength: uint16
-  extrasLength: uint8
-  dataType: uint8
-  status: uint16
-  totalBodyLength: uint32
-  opaque: uint32
-  cas: uint64
-
 # https://code.google.com/p/memcached/wiki/BinaryProtocolRevamped#Response_Status
 type ResponseStatus = enum
   NoError                = 0x0000
@@ -127,6 +103,30 @@ type CommandOpcode = enum
   TAPCheckpointStart     = 0x46
   TAPCheckpointEnd       = 0x47
 
+# https://code.google.com/p/memcached/wiki/BinaryProtocolRevamped#Request_header
+network struct RequestHeader:
+  magic: uint8 = ReqMagic
+  opcode: CommandOpcode(uint8)
+  keyLength: uint16
+  extrasLength: uint8
+  dataType: uint8
+  vbucket: uint16
+  totalBodyLength: uint32
+  opaque: uint32
+  cas: uint64
+
+# https://code.google.com/p/memcached/wiki/BinaryProtocolRevamped#Response_header
+network struct ResponseHeader:
+  magic: uint8 = ResMagic
+  opcode: CommandOpcode(uint8)
+  keyLength: uint16
+  extrasLength: uint8
+  dataType: uint8
+  status: ResponseStatus(uint16)
+  totalBodyLength: uint32
+  opaque: uint32
+  cas: uint64
+
 type DataType = enum
   Raw = 0x00
 
@@ -191,7 +191,7 @@ proc justSendCommand(client: MemcacheClient, opcode: CommandOpcode, extras: RawD
   if client.status != stConnected:
     raise newException(NotConnectedError, "Memcache is not connected. Call connect function before")
   var header = newRequestHeader(
-    opcode = ord(opcode),
+    opcode = opcode,
     extrasLength = extras.size.uint8(),
     keyLength = key.size.uint16(),
     totalBodyLength = uint32(extras.size + key.size + value.size)
@@ -221,7 +221,7 @@ proc stats*(client: MemcacheClient): Table[string, string] =
 proc stats*(client: MemcacheClient, key: string): Table[string, string] =
   result = initTable[string, string]()
   var response = client.sendCommand(Stat, key = key.toRawData())
-  if response.header.status != 0:
+  if response.header.status != NoError:
     raise newException(KeyNotFoundError, "Stats for key " & key & " wasn't found")
   while response.header.totalBodyLength.int > 0:
     result.add(response.key, response.value)
@@ -241,14 +241,14 @@ proc add*(client: MemcacheClient, key: string, value: string, expiration: Sec = 
   var extras = newAddExtras(expiration = expiration.uint32())
   let response = client.sendCommand(Add, extras.toRawData(), key.toRawData(), value.toRawData())
   case response.header.status:
-    of ord(NoError): Added
-    of ord(KeyExists): AlreadyExists
+    of NoError: Added
+    of KeyExists: AlreadyExists
     else: AddError
 
 proc get*(client: MemcacheClient, key: string): string 
   {. raises: [KeyNotFoundError, NotConnectedError, ConnectionClosedError, TimeoutError, OSError] .} =
   let response = client.sendCommand(Get, key = key.toRawData())
-  if response.header.status == ord(KeyNotFound):
+  if response.header.status == KeyNotFound:
     raise newException(KeyNotFoundError, "Key " & key & " is not found")
   response.value
 
@@ -257,7 +257,7 @@ proc `[]`*(client: MemcacheClient, key: string): string =
 
 proc set*(client: MemcacheClient, key: string, value: string, expiration: Sec = Sec(0)): bool {. discardable .} =
   var extras = newAddExtras(expiration = expiration.uint32())
-  client.sendCommand(Set, extras.toRawData(), key.toRawData(), value.toRawData()).header.status == ord(NoError)
+  client.sendCommand(Set, extras.toRawData(), key.toRawData(), value.toRawData()).header.status == NoError
 
 proc `[]=`*(client: MemcacheClient, key: string, value: string): void =
   client.set(key, value)
@@ -280,7 +280,7 @@ proc touch*(client: MemcacheClient, key: string, expiration: Sec = Sec(0)): bool
   var exp = expiration.int32.htonl()
   var extras = RawData(data: addr exp, size: sizeof(expiration))
   let response = client.sendCommand(Touch, extras = extras, key = key.toRawData())
-  response.header.status == ord(NoError)
+  response.header.status == NoError
 
 when isMainModule:
   const expireTest = false
