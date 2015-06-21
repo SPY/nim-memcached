@@ -2,16 +2,21 @@ import macros, strutils
 from sockets import ntohl, ntohs, htons, htonl
 import endians
 
+export sockets.ntohl
+export sockets.ntohs
+export sockets.htonl
+export sockets.htons
+
 const bigInts = ["int16", "uint16", "int32", "uint32", "int", "uint", "int64", "uint64"]
 
 proc isBigInt(strType: string): bool =
   return strType in bigInts
 
-proc htonll(val: int64): int64 =
+proc htonll*(val: int64): int64 =
   var inp = val
   bigEndian64(addr result, addr inp)
 
-proc ntohll(val: int64): int64 =
+proc ntohll*(val: int64): int64 =
   var inp = val
   littleEndian64(addr result, addr inp)
 
