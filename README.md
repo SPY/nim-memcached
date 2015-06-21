@@ -8,7 +8,7 @@ var memcache = newMemcache()
 memcache.connect(Connection(host: "127.0.0.1", port: Port(11211)))
 memcache.add("hello", "world")
 echo memcache.get("hello") # => "world"
-echo memcache.exists("hello") # => true
+echo memcache.contains("hello") # => true
 memcache.touch("hello")
 memcache.delete("hello")
 
