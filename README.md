@@ -5,7 +5,7 @@ Examples:
 import memcache
 
 var memcache = newMemcache()
-memcache.connect(Connection(host: "127.0.0.1", port: Port(11211)))
+memcache.connect(host = "127.0.0.1", port = 11211.Port)
 memcache.add("hello", "world")
 echo memcache.get("hello") # => "world"
 echo memcache.contains("hello") # => true
