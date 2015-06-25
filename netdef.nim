@@ -48,7 +48,7 @@ proc makeCounstructor(typeName: NimNode, fields: NimNode): NimNode {. compileTim
   let ctorName = ident("new" & capitalize($typeName))
   let value = genSym(nskVar, "value")
   var ctor = quote do:
-    proc `ctorName`(): ref `typeName` =
+    proc `ctorName`*(): ref `typeName` =
       var `value` = new(`typeName`)
   var ctorParams = ctor[0][3]
   var ctorBody = ctor[0][6]
@@ -91,10 +91,10 @@ proc makeGetter(typeName, fieldName, fieldType, enumType: NimNode, isEnum: bool)
   let retType = if isEnum: enumType else: fieldType
   let capFieldName = ident("big" & capitalize($fieldName))
   let getterProc = quote do:
-    proc `fieldName`(self: `typeName`): `retType` =
+    proc `fieldName`*(self: `typeName`): `retType` =
       self.`capFieldName`.`convTypeIdent`.`convIdent`.`retType`
   let getterProcRef = quote do:
-    proc `fieldName`(self: ref `typeName`): `retType` =
+    proc `fieldName`*(self: ref `typeName`): `retType` =
       self[].`capFieldName`.`convTypeIdent`.`convIdent`.`retType`
   (getterProc[0], getterProcRef[0])
 
@@ -108,7 +108,7 @@ proc makeSetter(typeName, fieldName, fieldType, enumType: NimNode, isEnum: bool)
   setterName.add(fieldName)
   setterName.add(ident("="))
   let setterProc = quote do:
-    proc `setterName`(self: ref `typeName`, value: `valType`) =
+    proc `setterName`*(self: ref `typeName`, value: `valType`) =
       self.`capFieldName` = ord(value).`convTypeIdent`.`convIdent`.`fieldType`
   setterProc[0]
 
@@ -149,7 +149,7 @@ macro network*(command, body: stmt): stmt {. immediate .} =
           result.add(getref)
           result.add(makeSetter(typeName, fieldName, fieldType, enumType, isEnum))
         else:
-          recList.add(newIdentDefs(fieldName, fieldType))
+          recList.add(newIdentDefs(postfix(fieldName, "*"), fieldType))
       result[0][0][2][2] = recList
       result.add(makeCounstructor(typeName, body))
 
