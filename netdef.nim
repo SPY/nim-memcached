@@ -1,5 +1,4 @@
-import macros, strutils
-import endians
+import macros, strutils, endians
 
 type FieldType = tuple[isEnum: bool, storeType, pubType: string, default: NimNode]
 type Field = tuple[pub: bool, name: string, fieldType: FieldType]
@@ -47,32 +46,29 @@ proc makeCounstructor(def: NetworkStruct): NimNode {. compileTime .} =
   let ctorName = if def.pub: postfix(ctorIdent, "*") else: ctorIdent
   let value = genSym(nskVar, "value")
   let typeName = &def.name
-  var ctor = quote do:
+  result = quote do:
     proc `ctorName`(): ref `typeName` =
       var `value` = new(`typeName`)
-  var ctorParams = ctor[0][3]
-  var ctorBody = ctor[0][6]
+  var params = result[0][3]
+  var body = result[0][6]
   for field in def.fields:
     let fieldName = &field.name
-    let assign = quote do:
+    body.add quote do:
       `value`.`fieldName` = `fieldName`
-    ctorParams.add(newIdentDefs(fieldName, &field.fieldType.pubType, field.fieldType.default))
-    ctorBody.add(assign[0])
-  ctorBody.add(value)
-  ctor[0]
+    params.add(newIdentDefs(fieldName, &field.fieldType.pubType, field.fieldType.default))
+  body.add(value)
 
-proc makeGetter(name: string, field: Field): tuple[get, getref: NimNode] {. compileTime .} =
+proc makeGetter(name: string, field: Field): NimNode {. compileTime .} =
   let retType = &field.fieldType.pubType
   let capFieldName = ident("big" & capitalize(field.name))
   let fieldNameWithPub = if field.pub: postfix(&field.name, "*") else: &field.name
   let typeName = &name
-  let getterProc = quote do:
+  result = quote do:
     proc `fieldNameWithPub`(self: `typeName`): `retType` =
       self.`capFieldName`.netToHost().`retType`
-  let getterProcRef = quote do:
+  result.add quote do:
     proc `fieldNameWithPub`(self: ref `typeName`): `retType` =
       self[].`capFieldName`.netToHost().`retType`
-  (getterProc[0], getterProcRef[0])
 
 proc makeSetter(name: string, field: Field): NimNode {. compileTime .} =
   let valType = &field.fieldType.pubType
@@ -83,10 +79,9 @@ proc makeSetter(name: string, field: Field): NimNode {. compileTime .} =
   let setterNameWithPub = if field.pub: postfix(setterName, "*") else: setterName
   let typeName = &name
   let fieldType = &field.fieldType.storeType
-  let setterProc = quote do:
+  result = quote do:
     proc `setterNameWithPub`(self: ref `typeName`, value: `valType`) =
       self.`capFieldName` = ord(value).`fieldType`.hostToNet()
-  setterProc[0]
 
 proc parseHeader(header: NimNode): tuple[pub: bool, name: string] {. compileTime .} =
   if header.kind != nnkCommand or $header[0] != "struct":
@@ -162,15 +157,13 @@ macro network*(command, body: stmt): stmt {. immediate .} =
   var recList = newNimNode(nnkRecList)
   for field in def.fields:
     if isBigInt(field.fieldType.storeType) or field.fieldType.isEnum:
-      let capFieldName = ident("big" & capitalize(field.name))
-      recList.add(newIdentDefs(capFieldName, &field.fieldType.storeType))
-      let (get, getref) = makeGetter(def.name, field)
-      result.add(get)
-      result.add(getref)
+      recList.add(newIdentDefs(ident("big" & capitalize(field.name)), &field.fieldType.storeType))
+      result.add(makeGetter(def.name, field))
       result.add(makeSetter(def.name, field))
     else:
       let fieldName = if field.pub: postfix(&field.name, "*") else: &field.name
       recList.add(newIdentDefs(fieldName, &field.fieldType.storeType))
+  # add record list to object definition
   result[0][0][2][2] = recList
   result.add(makeCounstructor(def))
 
