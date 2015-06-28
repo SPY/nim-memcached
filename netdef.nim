@@ -4,6 +4,7 @@ type FieldType = tuple[isEnum: bool, storeType, pubType: string, default: NimNod
 type Field = tuple[pub: bool, name: string, fieldType: FieldType]
 type NetworkStruct = tuple[pub: bool, name: string, fields: seq[Field]]
 
+const supportedTypes = ["int8", "uint8", "int16", "uint16", "int32", "uint32", "int64", "uint64"]
 const bigInts = ["int16", "uint16", "int32", "uint32", "int64", "uint64"]
 
 proc isBigInt(strType: string): bool =
@@ -156,6 +157,8 @@ macro network*(command, body: stmt): stmt {. immediate .} =
     type `typeName` = object {. pure .}
   var recList = newNimNode(nnkRecList)
   for field in def.fields:
+    if field.fieldType.storeType notin supportedTypes:
+      error "Only integer types with fixed bits amount supported, but " & $field.fieldType.storeType & " was founded"
     if isBigInt(field.fieldType.storeType) or field.fieldType.isEnum:
       recList.add(newIdentDefs(ident("big" & capitalize(field.name)), &field.fieldType.storeType))
       result.add(makeGetter(def.name, field))
@@ -170,13 +173,13 @@ macro network*(command, body: stmt): stmt {. immediate .} =
 when isMainModule:
   type Opcode = enum One = 3, Two = 7, Three = 8
 
-  network struct RequestHeader:
-    magic: uint8 = 0x80
+  network struct pub RequestHeader:
+    pub magic: uint8 = 0x80
     pub opcode: Opcode(uint8) = Two
-    keyLength: uint16
-    extrasLength: uint8
-    dataType: uint8
-    vbucket: uint16
+    priv keyLength: uint16
+    priv extrasLength: uint8
+    pub dataType: uint8
+    pub vbucket: uint16
     totalBodyLength: uint32
     opaque: uint32
     cas: uint64
@@ -189,3 +192,4 @@ when isMainModule:
   assert header.bigKeyLength.int() == (8 shl 8)
   assert header.keyLength.int() == 8
   header.totalBodyLength = 0xdeadbeef
+  assert header.totalBodyLength.int64 == 0xdeadbeef
