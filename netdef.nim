@@ -92,10 +92,8 @@ proc makeSetter(name: string, field: Field): NimNode {. compileTime .} =
   setterProc[0]
 
 proc parseHeader(header: NimNode): tuple[pub: bool, name: string] {. compileTime .} =
-  assert(
-    header.kind == nnkCommand and $header[0] == "struct",
-    "Def header should be in format \"network struct [pub|priv] <type>\""
-  )
+  if header.kind != nnkCommand or $header[0] != "struct":
+    error "Def header should be in format \"network struct [pub|priv] <type>\""
   let def = header[1]
   case def.kind
   of nnkIdent:
@@ -104,17 +102,13 @@ proc parseHeader(header: NimNode): tuple[pub: bool, name: string] {. compileTime
   of nnkCommand:
     # with access quantificator: network struct pub TypeName
     let access = $def[0]
-    assert(
-      access == "pub" or access == "priv",
-      "Only two access quantificators available: pub and priv"
-    )
-    assert(
-      def[1].kind == nnkIdent,
-      "Struct type name should be identifier"
-    )
+    if access != "pub" and access != "priv":
+      error "Only two access quantificators available: pub and priv"
+    if def[1].kind != nnkIdent:
+      error "Struct type name should be identifier"
     result = (access == "pub", $def[1])
   else:
-    assert(false, "Wrong network struct header format")
+    error "Wrong network struct header format"
 
 proc parseFieldType(fieldType: NimNode): FieldType {. compileTime .} =
   case fieldType[0].kind
@@ -133,7 +127,7 @@ proc parseFieldType(fieldType: NimNode): FieldType {. compileTime .} =
       # enum field with defalut value
       result = (true, $fieldType[0][0][1], $fieldType[0][0][0], fieldType[0][1])
     else:
-      assert(false, "Wrong field type default value format")
+      error "Wrong field type default value format"
   of nnkCall:
     # enum field without default
     let enumType = fieldType[0][0]
@@ -141,7 +135,7 @@ proc parseFieldType(fieldType: NimNode): FieldType {. compileTime .} =
       low(`enumType`)
     result = (true, $fieldType[0][1], $enumType, def[0])
   else:
-    assert(false, "Wrong field type format")
+    error "Wrong field type format. Desired: [pub/priv] <name>: <int-type>|Enum(<int-type) [= <default>]"
 
 proc parseField(field: NimNode): Field {. compileTime .} =
   case field.kind
@@ -150,13 +144,11 @@ proc parseField(field: NimNode): Field {. compileTime .} =
     result = (false, $field[0], parseFieldType(field[1]))
   of nnkCommand:
     let access = $field[0]
-    assert(
-      access == "pub" or access == "priv",
-      "Only two access quantificators available: pub and priv"
-    )
+    if access != "pub" and access != "priv":
+      error "Only two access quantificators available: pub and priv"
     result = (access == "pub", $field[1], parseFieldType(field[2]))
   else:
-    assert(false, "Wrong field format")
+    error "Wrong field format"
 
 proc parseDefAst(header: NimNode, body: NimNode): NetworkStruct {. compileTime .} =
   let (access, name) = parseHeader(header)

@@ -52,6 +52,7 @@ proc waitForResponse(client: MemcacheAsyncClient): Future[Response] {. async .} 
   var headerStr = await client.socket.recv(sizeof(ResponseHeader))
   var header = ResponseHeader()
   copyMem(cast[pointer](addr(header)), addr(headerStr[0]), sizeof(RequestHeader))
+  assert(header.magic.int == ResMagic.int)
 
   # cast sizes to int for making compiler happy
   let bodySize: int = header.totalBodyLength.int

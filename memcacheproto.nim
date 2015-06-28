@@ -111,8 +111,6 @@ network struct pub ResponseHeader:
   pub opaque: uint32
   pub cas: uint64
 
-export ResponseHeader
-
 type Sec* = distinct uint32
 
 type Response* = object
