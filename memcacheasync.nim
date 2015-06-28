@@ -1,6 +1,7 @@
 import asyncnet, asyncdispatch, tables
 from os import sleep
 from net import Port
+from sockets import htonl
 import netdef, memcacheproto
 
 type MemcacheConnectionError* = object of IOError
