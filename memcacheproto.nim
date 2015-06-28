@@ -88,30 +88,28 @@ type CommandOpcode* {. pure .} = enum
   TAPCheckpointEnd       = 0x47
 
 # https://code.google.com/p/memcached/wiki/BinaryProtocolRevamped#Request_header
-network struct RequestHeader:
-  magic: uint8 = ReqMagic
-  opcode: CommandOpcode(uint8)
-  keyLength: uint16
-  extrasLength: uint8
-  dataType: DataType(uint8) = Raw
-  vbucket: uint16
-  totalBodyLength: uint32
-  opaque: uint32
-  cas: uint64
-
-export RequestHeader
+network struct pub RequestHeader:
+  pub magic: uint8 = ReqMagic
+  pub opcode: CommandOpcode(uint8)
+  pub keyLength: uint16
+  pub extrasLength: uint8
+  pub dataType: DataType(uint8) = Raw
+  pub vbucket: uint16
+  pub totalBodyLength: uint32
+  pub opaque: uint32
+  pub cas: uint64
 
 # https://code.google.com/p/memcached/wiki/BinaryProtocolRevamped#Response_header
-network struct ResponseHeader:
-  magic: uint8 = ResMagic
-  opcode: CommandOpcode(uint8)
-  keyLength: uint16
-  extrasLength: uint8
-  dataType: DataType(uint8) = Raw
-  status: ResponseStatus(uint16)
-  totalBodyLength: uint32
-  opaque: uint32
-  cas: uint64
+network struct pub ResponseHeader:
+  pub magic: uint8 = ResMagic
+  pub opcode: CommandOpcode(uint8)
+  pub keyLength: uint16
+  pub extrasLength: uint8
+  pub dataType: DataType(uint8) = Raw
+  pub status: ResponseStatus(uint16)
+  pub totalBodyLength: uint32
+  pub opaque: uint32
+  pub cas: uint64
 
 export ResponseHeader
 
@@ -132,11 +130,9 @@ const empty*: RawData = RawData(data: nil, size: 0)
 proc toRawData*(str: string): RawData =
   RawData(data: str.cstring, size: str.len())
 
-network struct AddExtras:
-  flags: uint32
-  expiration: uint32
-
-export AddExtras
+network struct pub AddExtras:
+  pub flags: uint32
+  pub expiration: uint32
 
 type AddStatus* = enum
   Added, AlreadyExists, AddError

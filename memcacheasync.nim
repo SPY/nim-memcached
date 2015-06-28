@@ -95,8 +95,7 @@ proc add*(client: MemcacheAsyncClient, key: string, value: string, expiration: S
 
 proc get*(client: MemcacheAsyncClient, key: string): Future[string] =
   let res = newFuture[string]()
-  let responseFuture = client.sendCommand(CommandOpcode.Get, key = key.toRawData())
-  responseFuture.callback = proc(future: Future[Response]) {.closure, gcsafe.} =
+  client.sendCommand(CommandOpcode.Get, key = key.toRawData()).callback = proc(future: Future[Response]) {.closure, gcsafe.} =
     let response = future.read()
     if response.header.status == ResponseStatus.KeyNotFound:
       res.fail(newException(KeyNotFoundError, "Key " & key & " is not found"))
