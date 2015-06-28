@@ -1,5 +1,6 @@
 import net, tables
 from os import sleep
+from sockets import htonl
 import netdef, memcacheproto
 
 type MemcacheConnectionError* = object of IOError

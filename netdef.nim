@@ -1,11 +1,5 @@
 import macros, strutils
-from sockets import ntohl, ntohs, htons, htonl
 import endians
-
-export sockets.ntohl
-export sockets.ntohs
-export sockets.htonl
-export sockets.htons
 
 type FieldType = tuple[isEnum: bool, storeType, pubType: string, default: NimNode]
 type Field = tuple[pub: bool, name: string, fieldType: FieldType]
@@ -16,27 +10,34 @@ const bigInts = ["int16", "uint16", "int32", "uint32", "int64", "uint64"]
 proc isBigInt(strType: string): bool =
   return strType in bigInts
 
-proc htonll*(val: int64): int64 =
-  var inp = val
-  bigEndian64(addr result, addr inp)
+proc netToHost(val: int8): int8 = val
+proc hostToNet(val: int8): int8 = val
+proc netToHost(val: uint8): uint8 = val
+proc hostToNet(val: uint8): uint8 = val
 
-proc ntohll*(val: int64): int64 =
-  var inp = val
-  littleEndian64(addr result, addr inp)
+macro makeEndianSwapper(capacity: int, typeStr: string): stmt =
+  let intType = ident($typeStr)
+  let swapper = ident("swapEndian" & $intVal(capacity))
+  let res = genSym(nskVar, "res")
+  result = quote do:
+    proc netToHost(val: `intType`): `intType` =
+      var inp = val
+      var `res`: `intType`
+      `swapper`(addr `res`, addr inp)
+      `res`
+  result.add quote do:
+    proc hostToNet(val: `intType`): `intType` =
+      var inp = val
+      var `res`: `intType`
+      `swapper`(addr `res`, addr inp)
+      `res`
 
-proc getterTypes(strType: string): tuple[t, procName: string] =
-  case strType:
-  of "int8", "uint8": return (strType, strType)
-  of "int16", "uint16": return ("int16", "ntohs")
-  of "int32", "uint32": return ("int32", "ntohl")
-  of "int64", "uint64": return ("int64", "ntohll")
-
-proc setterTypes(strType: string): tuple[t, procName: string] =
-  case strType:
-  of "int8", "uint8": return (strType, strType)
-  of "int16", "uint16": return ("int16", "htons")
-  of "int32", "uint32": return ("int32", "htonl")
-  of "int64", "uint64": return ("int64", "htonll")
+makeEndianSwapper(16, "int16")
+makeEndianSwapper(16, "uint16")
+makeEndianSwapper(32, "int32")
+makeEndianSwapper(32, "uint32")
+makeEndianSwapper(64, "int64")
+makeEndianSwapper(64, "uint64")
 
 proc `&`(str: string): NimNode {. compileTime .} =
   result = ident(str)
@@ -61,24 +62,20 @@ proc makeCounstructor(def: NetworkStruct): NimNode {. compileTime .} =
   ctor[0]
 
 proc makeGetter(name: string, field: Field): tuple[get, getref: NimNode] {. compileTime .} =
-  let (convType, conv) = getterTypes(field.fieldType.storeType)
-  let (convTypeIdent, convIdent) = (&convType, &conv)
   let retType = &field.fieldType.pubType
   let capFieldName = ident("big" & capitalize(field.name))
   let fieldNameWithPub = if field.pub: postfix(&field.name, "*") else: &field.name
   let typeName = &name
   let getterProc = quote do:
     proc `fieldNameWithPub`(self: `typeName`): `retType` =
-      self.`capFieldName`.`convTypeIdent`.`convIdent`.`retType`
+      self.`capFieldName`.netToHost().`retType`
   let getterProcRef = quote do:
     proc `fieldNameWithPub`(self: ref `typeName`): `retType` =
-      self[].`capFieldName`.`convTypeIdent`.`convIdent`.`retType`
+      self[].`capFieldName`.netToHost().`retType`
   (getterProc[0], getterProcRef[0])
 
 proc makeSetter(name: string, field: Field): NimNode {. compileTime .} =
   let valType = &field.fieldType.pubType
-  let (convType, conv) = setterTypes(field.fieldType.storeType)
-  let (convTypeIdent, convIdent) = (&convType, &conv)
   let capFieldName = ident("big" & capitalize(field.name))
   var setterName = newNimNode(nnkAccQuoted)
   setterName.add(&field.name)
@@ -88,7 +85,7 @@ proc makeSetter(name: string, field: Field): NimNode {. compileTime .} =
   let fieldType = &field.fieldType.storeType
   let setterProc = quote do:
     proc `setterNameWithPub`(self: ref `typeName`, value: `valType`) =
-      self.`capFieldName` = ord(value).`convTypeIdent`.`convIdent`.`fieldType`
+      self.`capFieldName` = ord(value).`fieldType`.hostToNet()
   setterProc[0]
 
 proc parseHeader(header: NimNode): tuple[pub: bool, name: string] {. compileTime .} =
@@ -182,7 +179,7 @@ when isMainModule:
 
   network struct RequestHeader:
     magic: uint8 = 0x80
-    opcode: Opcode(uint8) = Two
+    pub opcode: Opcode(uint8) = Two
     keyLength: uint16
     extrasLength: uint8
     dataType: uint8
@@ -198,3 +195,4 @@ when isMainModule:
   assert header.opcode.int() == 8
   assert header.bigKeyLength.int() == (8 shl 8)
   assert header.keyLength.int() == 8
+  header.totalBodyLength = 0xdeadbeef
