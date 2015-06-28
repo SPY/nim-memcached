@@ -105,13 +105,6 @@ proc get*(client: MemcacheAsyncClient, key: string): Future[string] =
       res.complete(response.value)
   res
 
-proc getAsync*(client: MemcacheAsyncClient, key: string): Future[string] {. async .} =
-  let response = await client.sendCommand(CommandOpcode.Get, key = key.toRawData())
-  if response.header.status == ResponseStatus.KeyNotFound:
-    raise newException(KeyNotFoundError, "Key " & key & " is not found")
-  else:
-    result = response.value
-
 proc set*(client: MemcacheAsyncClient, key: string, value: string, expiration: Sec = Sec(0)): Future[bool] {. async .} =
   var extras = newAddExtras(expiration = expiration.uint32())
   let response = await client.sendCommand(CommandOpcode.Set, extras.toRawData(), key.toRawData(), value.toRawData())
@@ -145,11 +138,6 @@ when isMainModule:
     await memcache.touch(hello, 10.Sec)
     try:
       let value = await memcache.get("unknown")
-      assert false
-    except KeyNotFoundError:
-      assert true
-    try: # fail with error
-      let value = await memcache.getAsync("unknown")
       assert false
     except KeyNotFoundError:
       assert true
