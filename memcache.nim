@@ -20,6 +20,7 @@ proc newMemcache*(): MemcacheClient =
 
 proc connect*(client: var MemcacheClient, host: string = "127.0.0.1", port: Port = 11211.Port)
   {. raises: [MemcacheConnectionError, AlreadyConnectedError] .} =
+  ## Connect to memcache server
   if client.status == stConnected:
     raise newException(AlreadyConnectedError, "Memcache client is connected")
   try:
@@ -91,9 +92,11 @@ proc sendCommand(
   client.waitForResponse()
 
 proc version*(client: MemcacheClient): string =
+  ## returns memcache server version
   client.sendCommand(CommandOpcode.Version).value
 
 proc stats*(client: MemcacheClient): Table[string, string] =
+  ## returns default memcache server statistic data
   result = initTable[string, string]()
   var response = client.sendCommand(CommandOpcode.Stat)
   while response.header.totalBodyLength.int > 0:
@@ -101,6 +104,7 @@ proc stats*(client: MemcacheClient): Table[string, string] =
     response = client.waitForResponse()
 
 proc stats*(client: MemcacheClient, key: string): Table[string, string] =
+  ## request statistic by special key
   result = initTable[string, string]()
   var response = client.sendCommand(CommandOpcode.Stat, key = key.toRawData())
   if response.header.status != ResponseStatus.NoError:
@@ -110,6 +114,7 @@ proc stats*(client: MemcacheClient, key: string): Table[string, string] =
     response = client.waitForResponse()
 
 proc add*(client: MemcacheClient, key: string, value: string, expiration: Sec = Sec(0)): AddStatus {. discardable .} =
+  ## put value to memcache
   var extras = newAddExtras(expiration = expiration.uint32())
   let response = client.sendCommand(CommandOpcode.Add, extras.toRawData(), key.toRawData(), value.toRawData())
   case response.header.status:
@@ -117,29 +122,39 @@ proc add*(client: MemcacheClient, key: string, value: string, expiration: Sec = 
     of ResponseStatus.KeyExists: AlreadyExists
     else: AddError
 
-proc get*(client: MemcacheClient, key: string): string 
+proc get*(client: MemcacheClient, key: string): string
   {. raises: [KeyNotFoundError, NotConnectedError, ConnectionClosedError, TimeoutError, OSError] .} =
+  ## request memcache for key
+  ## if key doesn't exists or has been expiered
+  ## KeyNotFoundError would be raised
   let response = client.sendCommand(CommandOpcode.Get, key = key.toRawData())
   if response.header.status == ResponseStatus.KeyNotFound:
     raise newException(KeyNotFoundError, "Key " & key & " is not found")
   response.value
 
 proc `[]`*(client: MemcacheClient, key: string): string =
+  ## alias for `get` procedure
   client.get(key)
 
 proc set*(client: MemcacheClient, key: string, value: string, expiration: Sec = Sec(0)): bool {. discardable .} =
+  ## set key value
+  ## if item doesn't exist, it will be created
+  ## `expiration` will be replaced by parameter, even if it was ommited(then expiration == 0 or never expiered)
   var extras = newAddExtras(expiration = expiration.uint32())
   let response = client.sendCommand(CommandOpcode.Set, extras.toRawData(), key.toRawData(), value.toRawData())
   response.header.status == ResponseStatus.NoError
 
 proc `[]=`*(client: MemcacheClient, key: string, value: string): void =
+  ## alias for `set` procedure with defalut expiration equals to 0
   client.set(key, value)
 
 proc `[]=`*(client: MemcacheClient, key: string, value: tuple[value: string, expiration: Sec]): void =
+  ## alias for `set` procedure
   client.set(key, value.value, value.expiration)
 
 proc contains*(client: MemcacheClient, key: string): bool
   {. raises: [ConnectionClosedError, NotConnectedError, TimeoutError, OSError] .} =
+  ## checks if key exists in memcache
   try:
     discard client.get(key)
     return true
@@ -147,9 +162,12 @@ proc contains*(client: MemcacheClient, key: string): bool
     return false
 
 proc delete*(client: MemcacheClient, key: string): void =
+  ## remove key from memcache
   discard client.sendCommand(CommandOpcode.Delete, key = key.toRawData())
 
 proc touch*(client: MemcacheClient, key: string, expiration: Sec = Sec(0)): bool {. discardable .} =
+  ## change key expiration
+  ## if key doesn't exists, false will be returned
   var exp = expiration.int32.htonl()
   var extras = RawData(data: addr exp, size: sizeof(expiration))
   let response = client.sendCommand(CommandOpcode.Touch, extras = extras, key = key.toRawData())
