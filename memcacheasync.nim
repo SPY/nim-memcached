@@ -8,6 +8,7 @@ type MemcacheConnectionError* = object of IOError
 type ConnectionClosedError* = object of IOError
 type NotConnectedError* = object of IOError
 type KeyNotFoundError* = object of IOError
+type KeyAlreadyExistsError* = object of IOError
 
 type MemcacheAsyncClient* = object
   socket: AsyncSocket
@@ -26,7 +27,7 @@ proc send(socket: AsyncSocket, data: RawData) {. async .} =
   copyMem(addr dataStr[0], cast[pointer](data.data), data.size)
   asyncCheck socket.send(dataStr)
 
-proc justSendCommand(
+proc sendCommand(
     client: MemcacheAsyncClient,
     opcode: CommandOpcode,
     extras: RawData = empty,
@@ -73,53 +74,48 @@ proc waitForResponse(client: MemcacheAsyncClient): Future[Response] {. async .} 
       value = data[extrasSize + keySize .. bodySize - 1]
   result = Response(header: header, extras: extras, key: key, value: value)
 
-proc sendCommand(
+proc executeCommand(
     client: MemcacheAsyncClient,
     opcode: CommandOpcode,
     extras: RawData = empty,
     key: RawData = empty,
     value: RawData = empty
   ): Future[Response] {. async .} =
-  await client.justSendCommand(opcode, extras, key, value)
+  await client.sendCommand(opcode, extras, key, value)
   result = await client.waitForResponse()
 
 proc version*(client: MemcacheAsyncClient): Future[string] {. async .} =
-  let response = await client.sendCommand(CommandOpcode.Version)
+  let response = await client.executeCommand(CommandOpcode.Version)
   result = response.value
 
-proc add*(client: MemcacheAsyncClient, key: string, value: string, expiration: Sec = Sec(0)): Future[AddStatus] {. async .} =
+proc add*(client: MemcacheAsyncClient, key: string, value: string, expiration: Sec = Sec(0)) {. async .} =
   var extras = newAddExtras(expiration = expiration.uint32())
-  let response = await client.sendCommand(CommandOpcode.Add, extras.toRawData(), key.toRawData(), value.toRawData())
-  case response.header.status:
-    of ResponseStatus.NoError: result = Added
-    of ResponseStatus.KeyExists: result = AlreadyExists
-    else: result = AddError
+  let response = await client.executeCommand(CommandOpcode.Add, extras.toRawData(), key.toRawData(), value.toRawData())
+  if response.header.status == ResponseStatus.KeyExists:
+    raise newException(KeyAlreadyExistsError, "Key has already exist")
 
-proc get*(client: MemcacheAsyncClient, key: string): Future[string] =
-  let res = newFuture[string]()
-  client.sendCommand(CommandOpcode.Get, key = key.toRawData()).callback = proc(future: Future[Response]) {.closure, gcsafe.} =
-    let response = future.read()
-    if response.header.status == ResponseStatus.KeyNotFound:
-      res.fail(newException(KeyNotFoundError, "Key " & key & " is not found"))
-    else:
-      res.complete(response.value)
-  res
+proc get*(client: MemcacheAsyncClient, key: string): Future[string] {. async .} =
+  let response = await client.executeCommand(CommandOpcode.Get, key = key.toRawData())
+  if response.header.status == ResponseStatus.KeyNotFound:
+    raise newException(KeyNotFoundError, "Key " & key & " is not found")
+  else:
+    return response.value
 
 proc set*(client: MemcacheAsyncClient, key: string, value: string, expiration: Sec = Sec(0)): Future[bool] {. async .} =
   var extras = newAddExtras(expiration = expiration.uint32())
-  let response = await client.sendCommand(CommandOpcode.Set, extras.toRawData(), key.toRawData(), value.toRawData())
+  let response = await client.executeCommand(CommandOpcode.Set, extras.toRawData(), key.toRawData(), value.toRawData())
   result = response.header.status == ResponseStatus.NoError
 
 proc touch*(client: MemcacheAsyncClient, key: string, expiration: Sec = Sec(0)) {. async .} =
   var exp = expiration.int32.htonl()
   var extras = RawData(data: addr exp, size: sizeof(expiration))
-  let _ = await client.sendCommand(CommandOpcode.Touch, extras = extras, key = key.toRawData())
+  let _ = await client.executeCommand(CommandOpcode.Touch, extras = extras, key = key.toRawData())
 
 proc delete*(client: MemcacheAsyncClient, key: string) {. async .} =
-  let _ = await client.sendCommand(CommandOpcode.Delete, key = key.toRawData())
+  let _ = await client.executeCommand(CommandOpcode.Delete, key = key.toRawData())
 
 proc contains*(client: MemcacheAsyncClient, key: string): Future[bool] {. async .} =
-  let response = await client.sendCommand(CommandOpcode.Get, key = key.toRawData())
+  let response = await client.executeCommand(CommandOpcode.Get, key = key.toRawData())
   result = response.header.status == ResponseStatus.NoError
 
 when isMainModule:
@@ -131,7 +127,7 @@ when isMainModule:
     var memcache = newMemcache()
     await memcache.connect(host = "127.0.0.1", port = 11211.Port)
     await memcache.delete(hello)
-    assert(await(memcache.add(hello, world)) == Added, "Key shouldn't exist before")
+    await memcache.add(hello, world)
     assert(await(memcache.get(hello)) == world, "Get should return correct value")
     assert(await memcache.set(hello, "another"))
     assert(await(memcache.get(hello)) == "another", "Get should return correct another value")

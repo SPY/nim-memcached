@@ -1,13 +1,16 @@
 import net, tables
-from os import sleep
 from sockets import htonl
 import netdef, memcacheproto
+
+export net.Port
+export memcacheproto.Sec
 
 type MemcacheConnectionError* = object of IOError
 type AlreadyConnectedError* = object of IOError
 type ConnectionClosedError* = object of IOError
 type NotConnectedError* = object of IOError
 type KeyNotFoundError* = object of IOError
+type KeyAlreadyExistsError* = object of IOError
 
 type ConnectionStatus = enum
   stNew, stConnected
@@ -59,7 +62,7 @@ proc waitForResponse(client: MemcacheClient): Response =
 proc send(socket: Socket, data: RawData) =
   discard socket.send(data.data, data.size)
 
-proc justSendCommand(
+proc sendCommand(
     client: MemcacheClient,
     opcode: CommandOpcode,
     extras: RawData = empty,
@@ -82,24 +85,24 @@ proc justSendCommand(
   if value.size > 0:
     client.socket.send(value)
 
-proc sendCommand(
+proc executeCommand(
     client: MemcacheClient,
     opcode: CommandOpcode,
     extras: RawData = empty,
     key: RawData = empty,
     value: RawData = empty
   ): Response =
-  client.justSendCommand(opcode, extras, key, value)
+  client.sendCommand(opcode, extras, key, value)
   client.waitForResponse()
 
 proc version*(client: MemcacheClient): string =
   ## returns memcache server version
-  client.sendCommand(CommandOpcode.Version).value
+  client.executeCommand(CommandOpcode.Version).value
 
 proc stats*(client: MemcacheClient): Table[string, string] =
   ## returns default memcache server statistic data
   result = initTable[string, string]()
-  var response = client.sendCommand(CommandOpcode.Stat)
+  var response = client.executeCommand(CommandOpcode.Stat)
   while response.header.totalBodyLength.int > 0:
     result.add(response.key, response.value)
     response = client.waitForResponse()
@@ -107,28 +110,26 @@ proc stats*(client: MemcacheClient): Table[string, string] =
 proc stats*(client: MemcacheClient, key: string): Table[string, string] =
   ## request statistic by special key
   result = initTable[string, string]()
-  var response = client.sendCommand(CommandOpcode.Stat, key = key.toRawData())
+  var response = client.executeCommand(CommandOpcode.Stat, key = key.toRawData())
   if response.header.status != ResponseStatus.NoError:
     raise newException(KeyNotFoundError, "Stats for key " & key & " wasn't found")
   while response.header.totalBodyLength.int > 0:
     result.add(response.key, response.value)
     response = client.waitForResponse()
 
-proc add*(client: MemcacheClient, key: string, value: string, expiration: Sec = Sec(0)): AddStatus {. discardable .} =
+proc add*(client: MemcacheClient, key: string, value: string, expiration: Sec = Sec(0)) {. discardable .} =
   ## put value to memcache
   var extras = newAddExtras(expiration = expiration.uint32())
-  let response = client.sendCommand(CommandOpcode.Add, extras.toRawData(), key.toRawData(), value.toRawData())
-  case response.header.status:
-    of ResponseStatus.NoError: Added
-    of ResponseStatus.KeyExists: AlreadyExists
-    else: AddError
+  let response = client.executeCommand(CommandOpcode.Add, extras.toRawData(), key.toRawData(), value.toRawData())
+  if response.header.status == ResponseStatus.KeyExists:
+    raise newException(KeyAlreadyExistsError, "Key has already exist")
 
 proc get*(client: MemcacheClient, key: string): string
   {. raises: [KeyNotFoundError, NotConnectedError, ConnectionClosedError, TimeoutError, OSError] .} =
   ## request memcache for key
   ## if key doesn't exists or has been expiered
   ## KeyNotFoundError would be raised
-  let response = client.sendCommand(CommandOpcode.Get, key = key.toRawData())
+  let response = client.executeCommand(CommandOpcode.Get, key = key.toRawData())
   if response.header.status == ResponseStatus.KeyNotFound:
     raise newException(KeyNotFoundError, "Key " & key & " is not found")
   response.value
@@ -142,7 +143,7 @@ proc set*(client: MemcacheClient, key: string, value: string, expiration: Sec = 
   ## if item doesn't exist, it will be created
   ## `expiration` will be replaced by parameter, even if it was ommited(then expiration == 0 or never expiered)
   var extras = newAddExtras(expiration = expiration.uint32())
-  let response = client.sendCommand(CommandOpcode.Set, extras.toRawData(), key.toRawData(), value.toRawData())
+  let response = client.executeCommand(CommandOpcode.Set, extras.toRawData(), key.toRawData(), value.toRawData())
   response.header.status == ResponseStatus.NoError
 
 proc `[]=`*(client: MemcacheClient, key: string, value: string): void =
@@ -164,51 +165,12 @@ proc contains*(client: MemcacheClient, key: string): bool
 
 proc delete*(client: MemcacheClient, key: string): void =
   ## remove key from memcache
-  discard client.sendCommand(CommandOpcode.Delete, key = key.toRawData())
+  discard client.executeCommand(CommandOpcode.Delete, key = key.toRawData())
 
 proc touch*(client: MemcacheClient, key: string, expiration: Sec = Sec(0)): bool {. discardable .} =
   ## change key expiration
   ## if key doesn't exists, false will be returned
   var exp = expiration.int32.htonl()
   var extras = RawData(data: addr exp, size: sizeof(expiration))
-  let response = client.sendCommand(CommandOpcode.Touch, extras = extras, key = key.toRawData())
+  let response = client.executeCommand(CommandOpcode.Touch, extras = extras, key = key.toRawData())
   response.header.status == ResponseStatus.NoError
-
-when isMainModule:
-  const expireTest = false
-  const touchTest = false
-  const hello = "hello"
-  const world = "world"
-  var memcache = newMemcache()
-  memcache.connect(host = "127.0.0.1", port = 11211.Port)
-  assert memcache.status == stConnected, "Status should be changed"
-  memcache.delete(hello)
-  assert memcache.add(hello, world) == Added, "Key shouldn't exist before"
-  assert memcache.get(hello) == world, "Get should return value"
-  assert memcache[hello] == world, "Getter should work like get"
-  memcache[hello] = "another"
-  assert memcache[hello] == "another", "Setter should change value"
-  assert memcache.contains(hello), "Key should be in memcache"
-  memcache.delete(hello)
-  assert hello notin memcache, "Key shouldn't be in memcache after remove"
-  try:
-    discard memcache.get(hello)
-    assert false, "Get of removed value should raise exception"
-  except KeyNotFoundError:
-    assert true
-  when expireTest:
-    memcache.add(hello, world, 2.Sec)
-    memcache["zippy"] = ("second", 2.Sec)
-    sleep(1000)
-    assert hello in memcache, "Key still should be in memcache"
-    assert memcache.contains("zippy"), "Key setted by tuple setter should set expiration too"
-    sleep(1500)
-    assert(hello notin memcache, "Should be expired")
-    assert(not memcache.contains("zippy"), "Should be expired")
-  when touchTest:
-    assert(not memcache.touch(hello), "Touch non-existed key should return false")
-    memcache[hello] = (world, 2.Sec)
-    sleep(1000)
-    assert memcache.touch(hello, 3.Sec), "Touch existed key should return true"
-    sleep(1500)
-    assert hello in memcache, "Key should be in memcach after touch"

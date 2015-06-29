@@ -132,8 +132,5 @@ network struct pub AddExtras:
   pub flags: uint32
   pub expiration: uint32
 
-type AddStatus* = enum
-  Added, AlreadyExists, AddError
-
 proc toRawData*(extras: ref AddExtras): RawData =
   RawData(data: cast[pointer](extras), size: sizeof(AddExtras))
