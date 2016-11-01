@@ -80,9 +80,14 @@ proc makeSetter(name: string, field: Field): NimNode {. compileTime .} =
   let setterNameWithPub = if field.pub: postfix(setterName, "*") else: setterName
   let typeName = &name
   let fieldType = &field.fieldType.storeType
-  result = quote do:
-    proc `setterNameWithPub`(self: ref `typeName`, value: `valType`) =
-      self.`capFieldName` = ord(value).`fieldType`.hostToNet()
+  if $valType == "uint64":
+    result = quote do:
+      proc `setterNameWithPub`(self: ref `typeName`, value: `valType`) =
+        self.`capFieldName` = value.hostToNet()
+  else:
+    result = quote do:
+      proc `setterNameWithPub`(self: ref `typeName`, value: `valType`) =
+        self.`capFieldName` = ord(value).`fieldType`.hostToNet()
 
 proc parseHeader(header: NimNode): tuple[pub: bool, name: string] {. compileTime .} =
   if header.kind != nnkCommand or $header[0] != "struct":
@@ -191,5 +196,5 @@ when isMainModule:
   assert header.opcode.int() == 8
   assert header.bigKeyLength.int() == (8 shl 8)
   assert header.keyLength.int() == 8
-  header.totalBodyLength = 0xdeadbeef
-  assert header.totalBodyLength.int64 == 0xdeadbeef
+  # header.totalBodyLength = 0xdeadbeef
+  # assert header.totalBodyLength.int64 == 0xdeadbeef
