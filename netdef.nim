@@ -196,5 +196,5 @@ when isMainModule:
   assert header.opcode.int() == 8
   assert header.bigKeyLength.int() == (8 shl 8)
   assert header.keyLength.int() == 8
-  # header.totalBodyLength = 0xdeadbeef
-  # assert header.totalBodyLength.int64 == 0xdeadbeef
+  header.totalBodyLength = cast[uint32](0xdeadbeef)
+  assert header.totalBodyLength == cast[uint32](0xdeadbeef)
